@@ -118,5 +118,6 @@ int main(int argc, char* argv[])
         std::cout << " operands=0x" << std::hex << operands << std::dec << std::nouppercase << std::endl;
     }
 
+    context->DestroyInstance();
     return 0;
 }
