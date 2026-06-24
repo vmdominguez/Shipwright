@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 #include <ship/Context.h>
-// libultraship archive API headers
+#include "ship/resource/ResourceManager.h"
 #include "ship/resource/archive/ArchiveManager.h"
 #include "ship/resource/File.h"
 
@@ -56,20 +56,22 @@ int main(int argc, char* argv[])
     std::string archivePath = argv[1];
 
     // initialize main Ship context; required to work with ArchiveManager
-    Ship::Context::CreateUninitializedInstance("OTR extractor", "vinny", "shipofharkinian.json");
+    auto context = Ship::Context::CreateUninitializedInstance("OTR extractor", "vinny", "shipofharkinian.json");
+    context->InitConfiguration();
+    context->InitResourceManager({ archivePath }, {}, 3, true);
 
     // Create a temporary ArchiveManager and mount the provided path.
     // AddArchive() returns a shared_ptr to the created archive; we also
     // check IsLoaded() to ensure the virtual filesystem populated.
-    ArchiveManager am;
-    auto added = am.AddArchive(archivePath);
-    if (!added || !am.IsLoaded()) {
+    ArchiveManager am = *context->GetResourceManager()->GetArchiveManager();
+    if (!am.IsLoaded()) {
         std::cerr << "Failed to open archive: " << archivePath << std::endl;
         return 3;
     }
 
     // The OTR virtual asset key for the bomb display list (from SOH headers).
-    const std::string assetKey = "__OTR__objects/object_gi_bomb_1/gGiBombDL";
+    // const std::string assetKey = "__OTR__objects/object_gi_bomb_1/gGiBombDL";
+    const std::string assetKey = "objects/object_gi_bomb_1/gGiBombDL";
 
     // Load raw file bytes. ArchiveManager::LoadFile returns a Ship::File
     // containing a shared buffer we can inspect without needing the whole
