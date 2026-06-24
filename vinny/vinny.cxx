@@ -9,9 +9,11 @@
 #include <unordered_map>
 
 #include <ship/Context.h>
-#include "ship/resource/ResourceManager.h"
-#include "ship/resource/archive/ArchiveManager.h"
-#include "ship/resource/File.h"
+#include <ship/resource/ResourceManager.h>
+#include <ship/resource/archive/ArchiveManager.h>
+#include <ship/resource/File.h>
+
+#include "FakeWindow.h"
 
 using namespace Ship;
 
@@ -57,8 +59,15 @@ int main(int argc, char* argv[])
 
     // initialize main Ship context; required to work with ArchiveManager
     auto context = Ship::Context::CreateUninitializedInstance("OTR extractor", "vinny", "shipofharkinian.json");
+    context->InitLogging(spdlog::level::debug, spdlog::level::debug);
     context->InitConfiguration();
+    context->InitConsoleVariables();
+    context->InitConsole();
     context->InitResourceManager({ archivePath }, {}, 3, true);
+    auto guiWindows = std::vector<std::shared_ptr<GuiWindow>>();
+    auto gui = std::make_shared<Gui>(guiWindows);
+    gui->Init();
+    context->InitWindow(std::make_shared<FakeWindow>(gui));
 
     // Create a temporary ArchiveManager and mount the provided path.
     // AddArchive() returns a shared_ptr to the created archive; we also
