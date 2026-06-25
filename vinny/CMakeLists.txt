@@ -20,8 +20,6 @@ set(BUILD_SHARED_LIBS OFF CACHE STRING "static libs")
 
 add_executable(${PROJECT_NAME}
     vinny.cxx
-    FakeWindow.h
-    FakeWindow.cxx
 )
 
 target_link_libraries(${PROJECT_NAME}

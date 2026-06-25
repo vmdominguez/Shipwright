@@ -7,39 +7,33 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <typeinfo>
 
 #include <ship/Context.h>
 #include <ship/resource/ResourceManager.h>
 #include <ship/resource/archive/ArchiveManager.h>
 #include <ship/resource/File.h>
+#include <libultraship/libultra/gbi.h>
+#include <fast/interpreter.h>
+#include <fast/resource/ResourceType.h>
+#include <fast/resource/factory/DisplayListFactory.h>
+#include <fast/resource/type/DisplayList.h>
 
-#include "FakeWindow.h"
+#include "FakeWindow.cxx"
+#include "FakeWindowBackend.cxx"
+#include "Extractor.cxx"
+#include "CommandMap.cxx"
 
-using namespace Ship;
+namespace Fast {
+    void GfxSetInstance(std::shared_ptr<Interpreter> gfx);
+}
 
-// Small helper that maps an F3D opcode byte to a readable name. This is
-// intentionally minimal — it only provides friendly labels for common opcodes
-// so the printed output is easier to scan.
-static std::string OpcodeName(uint8_t op)
-{
-    static const std::unordered_map<uint8_t, std::string> m = {
-        {0x00, "G_SPNOOP/G_NOOP"}, {0x01, "G_MTX"}, {0x03, "G_MOVEMEM"}, {0x04, "G_VTX"},
-        {0x06, "G_DL"}, {0xAF, "G_LOAD_UCODE"}, {0xB0, "G_BRANCH_Z"}, {0xB1, "G_TRI2"},
-        {0xB2, "G_MODIFYVTX"}, {0xB3, "G_RDPHALF_2"}, {0xB4, "G_RDPHALF_1"}, {0xB5, "G_QUAD"},
-        {0xB6, "G_CLEARGEOMETRYMODE"}, {0xB7, "G_SETGEOMETRYMODE"}, {0xB8, "G_ENDDL"},
-        {0xB9, "G_SETOTHERMODE_L"}, {0xBA, "G_SETOTHERMODE_H"}, {0xBB, "G_TEXTURE"},
-        {0xBC, "G_MOVEWORD"}, {0xBD, "G_POPMTX"}, {0xBE, "G_CULLDL"}, {0xBF, "G_TRI1"},
-        {0xC0, "G_NOOP"}, {0xE4, "G_TEXRECT"}, {0xE5, "G_TEXRECTFLIP"}, {0xE6, "G_RDPLOADSYNC"},
-        {0xE7, "G_RDPPIPESYNC"}, {0xE8, "G_RDPTILESYNC"}, {0xE9, "G_RDPFULLSYNC"},
-        {0xEA, "G_SETKEYGB"}, {0xEB, "G_SETKEYR"}, {0xEC, "G_SETCONVERT"}, {0xED, "G_SETSCISSOR"},
-        {0xEE, "G_SETPRIMDEPTH"}, {0xEF, "G_RDPSETOTHERMODE"}, {0xF0, "G_LOADTLUT"},
-        {0xF2, "G_SETTILESIZE"}, {0xF3, "G_LOADBLOCK"}, {0xF4, "G_LOADTILE"}, {0xF5, "G_SETTILE"},
-        {0xF6, "G_FILLRECT"}, {0xF7, "G_SETFILLCOLOR"}, {0xF8, "G_SETFOGCOLOR"},
-        {0xF9, "G_SETBLENDCOLOR"}, {0xFA, "G_SETPRIMCOLOR"}, {0xFB, "G_SETENVCOLOR"},
-        {0xFC, "G_SETCOMBINE"}, {0xFD, "G_SETTIMG"}, {0xFE, "G_SETZIMG"}, {0xFF, "G_SETCIMG"}
-    };
-    auto it = m.find(op);
-    return it != m.end() ? it->second : "UNKNOWN";
+void loadResourceFactories(std::shared_ptr<Ship::ResourceLoader> loader) {
+    loader->RegisterResourceFactory(std::make_shared<Fast::ResourceFactoryBinaryDisplayListV0>(),
+                                    RESOURCE_FORMAT_BINARY, "DisplayList",
+                                    static_cast<uint32_t>(Fast::ResourceType::DisplayList), 0);
+    loader->RegisterResourceFactory(std::make_shared<Fast::ResourceFactoryXMLDisplayListV0>(), RESOURCE_FORMAT_XML,
+                                    "DisplayList", static_cast<uint32_t>(Fast::ResourceType::DisplayList), 0);
 }
 
 // Program entrypoint. Usage: vinny <path-to-otr/o2r/or-directory>
@@ -64,59 +58,59 @@ int main(int argc, char* argv[])
     context->InitConsoleVariables();
     context->InitConsole();
     context->InitResourceManager({ archivePath }, {}, 3, true);
-    auto guiWindows = std::vector<std::shared_ptr<GuiWindow>>();
-    auto gui = std::make_shared<Gui>(guiWindows);
+    auto guiWindows = std::vector<std::shared_ptr<Ship::GuiWindow>>();
+    auto gui = std::make_shared<Ship::Gui>(guiWindows);
     gui->Init();
     context->InitWindow(std::make_shared<FakeWindow>(gui));
 
     // Create a temporary ArchiveManager and mount the provided path.
     // AddArchive() returns a shared_ptr to the created archive; we also
     // check IsLoaded() to ensure the virtual filesystem populated.
-    ArchiveManager am = *context->GetResourceManager()->GetArchiveManager();
+    auto am = *context->GetResourceManager()->GetArchiveManager();
     if (!am.IsLoaded()) {
         std::cerr << "Failed to open archive: " << archivePath << std::endl;
         return 3;
     }
+    loadResourceFactories(context->GetResourceManager()->GetResourceLoader());
 
     // The OTR virtual asset key for the bomb display list (from SOH headers).
-    // const std::string assetKey = "__OTR__objects/object_gi_bomb_1/gGiBombDL";
-    const std::string assetKey = "objects/object_gi_bomb_1/gGiBombDL";
+    const std::string assetKey = "__OTR__objects/object_gi_bomb_1/gGiBombDL";
+    
+    /* We'll use the Interpreter to traverse and process the display list command structure */
+    auto interpreter = std::make_shared<Fast::Interpreter>();
+    Fast::GfxSetInstance(interpreter);
+    auto gfxDebugger = std::make_shared<Fast::GfxDebugger>();
+    interpreter->SetGfxDebugger(gfxDebugger);
+    interpreter->Init(
+        new FakeWindowBackend(),
+        new Extractor(),
+        "extractor",
+        false,
+        0, 0,
+        0, 0
+    );
 
-    // Load raw file bytes. ArchiveManager::LoadFile returns a Ship::File
-    // containing a shared buffer we can inspect without needing the whole
-    // engine Context.
-    auto file = am.LoadFile(assetKey);
-    if (!file || !file->IsLoaded || file->Buffer->empty()) {
-        std::cerr << "Asset not found or empty: " << assetKey << std::endl;
-        return 4;
-    }
+    auto res = context->GetResourceManager()->LoadResource(assetKey);
+    if (res) {
+        std::cout << "got resource of type: " << typeid(res).name() << std::endl;
+        auto dlRes = std::dynamic_pointer_cast<Fast::DisplayList>(res);
+        if (dlRes) {
+            std::cout << "total Instruction Size: " << dlRes->Instructions.size() << ":" << std::endl;
 
-    // Interpret the buffer as a sequence of 64-bit big-endian words (F3D
-    // instructions are 8 bytes each). We then split each word into the
-    // opcode (top byte) and the remaining operands (low 56 bits).
-    auto& buf = *file->Buffer;
-    size_t size = buf.size();
-    std::cout << "Loaded asset " << assetKey << " (" << size << " bytes)" << std::endl;
+            for (size_t i = 0; i < dlRes->Instructions.size(); i++) {
+                std::string id = "##CMD" + std::to_string(i);
+                Gfx* gfx = (Gfx*)&dlRes->Instructions[i];
+                int cmd = static_cast<int>(gfx->words.w0 >> 24);
+                if (cmdMap.find(cmd) == cmdMap.end())
+                    continue;
 
-    if (size % 8 != 0) {
-        std::cout << "Warning: display list size not divisible by 8 bytes." << std::endl;
-    }
+                std::string cmdLabel = cmdMap.at(cmd);
 
-    size_t count = size / 8;
-    for (size_t i = 0; i < count; ++i) {
-        // Build 64-bit big-endian value from 8 consecutive bytes
-        uint64_t v = 0;
-        for (size_t b = 0; b < 8; ++b) {
-            v = (v << 8) | static_cast<uint8_t>(buf[i * 8 + b]);
+                std::cout << id << ": " << cmdLabel << std::endl;
+            }
         }
-        uint8_t opcode = static_cast<uint8_t>(v >> 56);
-        uint64_t operands = v & 0x00FFFFFFFFFFFFFFULL;
-
-        // Print index, opcode (hex), friendly name and raw operands (hex).
-        std::cout << "[" << i << "] 0x" << std::hex << std::uppercase << (uint32_t)opcode << std::dec
-                  << " (" << OpcodeName(opcode) << ") ";
-        std::cout << " operands=0x" << std::hex << operands << std::dec << std::nouppercase << std::endl;
     }
+    //     interpreter->Run(&gfx, {});
 
     context->DestroyInstance();
     return 0;
